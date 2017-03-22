@@ -76,19 +76,7 @@ func NewClient(hostname string, hashKeys bool, timeout time.Duration) (Client, e
 
 // Add multi keys to the filter
 func (t client) BulkSet(ctx context.Context, name Filter, keys ...string) ([]bool, error) {
-	cmd := t.groupCommand(BULK, name, keys...)
-	resp, err := t.sendCommand(cmd)
-
-	/*
-		if strings.HasPrefix(resp, "Yes") || strings.HasPrefix(resp, "No") {
-			split := strings.Split(resp, " ")
-			for _, res := range split {
-				rs = append(rs, res == "Yes")
-			}
-		}
-	*/
-
-	return nil, nil
+	return t.sendMultiCommand(BULK, name, keys...)
 }
 
 // Check if key exists in filter
@@ -98,22 +86,12 @@ func (t client) Check(ctx context.Context, name Filter, key string) (bool, error
 
 // Clears the filter
 func (t client) Clear(ctx context.Context, name Filter) error {
-	resp, err := t.sendCommand(fmt.Sprintf(DROP, name))
-	if err != nil {
-		return err
-	}
-
-	return nil
+	return t.sendCommandDone(fmt.Sprintf(DROP, name))
 }
 
 // Closes the filter
 func (t client) Close(ctx context.Context, name Filter) error {
-	resp, err := t.sendCommand(fmt.Sprintf(CLOSE, name))
-	if err != nil {
-		return err
-	}
-
-	return nil
+	return t.sendCommandDone(fmt.Sprintf(CLOSE, name))
 }
 
 // Creates new fiter
@@ -157,72 +135,26 @@ func (t client) CreateWithParams(ctx context.Context, name Filter, capacity int,
 
 // Permanently deletes filter
 func (t client) Drop(ctx context.Context, name Filter) error {
-	resp, err := t.sendCommand(fmt.Sprintf(DROP, name))
-	if err != nil {
-		return err
-	}
-
-	return nil
+	return t.sendCommandDone(fmt.Sprintf(DROP, name))
 }
 
 // Flush to disk
 func (t client) Flush(ctx context.Context) error {
-	resp, err := t.sendCommand(FLUSH)
-	if err != nil {
-		return err
-	}
-
-	return nil
+	return t.sendCommandDone(FLUSH)
 }
 
 func (t client) Info(ctx context.Context, name Filter) (map[string]string, error) {
-	resp, err := t.sendCommand(fmt.Sprintf(INFO, name))
-	if err != nil {
-		return nil, err
-	}
-
-	info := make(map[string]string)
-
-	// resp to info
-	/*
-		info, err := f.Conn.responseBlockToMap()
-		if err != nil {
-			return nil, err
-		}
-	*/
-	return info, nil
+	return t.sendBlockCommand(fmt.Sprintf(INFO, name))
 }
 
 // List filters
 func (t client) List(ctx context.Context) (map[string]string, error) {
-	resp, err := t.sendCommand(LIST)
-	if err != nil {
-		return nil, err
-	}
-
-	responses := make(map[string]string)
-	/*
-		resp, err := c.Conn.ReadBlock()
-		if err != nil {
-			return
-		}
-		for _, line := range resp {
-			split := strings.SplitN(line, " ", 2)
-			responses[split[0]] = split[1]
-		}
-	*/
-	return responses, nil
+	return t.sendBlockCommand(LIST)
 }
 
 // Checks whether multiple keys exist in the filter
 func (t client) MultiCheck(ctx context.Context, name Filter, keys ...string) ([]bool, error) {
-	cmd := t.groupCommand(MULTI, name, keys...)
-	resp, err := t.sendCommand(cmd)
-	if err != nil {
-		return nil, err
-	}
-
-	return nil, nil
+	return t.sendMultiCommand(MULTI, name, keys...)
 }
 
 // Add new key to filter
@@ -257,11 +189,41 @@ func (t client) hashKey(key string) string {
 	return key
 }
 
-func (t client) sendCommand(cmd string) (string, error) {
-	return t.sendRecv(cmd)
+func (t client) sendCommandDone(cmd string) error {
+	resp, err := t.sendCommand(cmd)
+	if err != nil {
+		return errors.Wrapf(err, "bloomd: error with command '%s'", cmd)
+	}
+
+	if resp != RESPONSE_DONE {
+		return errors.Errorf("bloomd: error with resp '%s' command '%s'", resp, cmd)
+	}
+
+	return nil
 }
 
-func (t client) groupCommand(cmd string, name Filter, keys ...string) string {
+func (t client) sendMultiCommand(c string, name Filter, keys ...string) ([]bool, error) {
+	cmd := t.multiCommand(c, name, keys...)
+
+	resp, err := t.sendCommand(cmd)
+	if err != nil {
+		return nil, errors.Wrapf(err, "bloomd: error with multi command '%s'", cmd)
+	}
+
+	if !strings.HasPrefix(resp, RESPONSE_YES) && !strings.HasPrefix(resp, RESPONSE_NO) {
+		return nil, errors.Errorf("bloomd: error with multi response '%s' command '%s'", resp, cmd)
+	}
+
+	results := make([]bool, 0, len(keys))
+	responses := strings.Split(resp, " ")
+	for _, r := range responses {
+		results = append(results, r == RESPONSE_YES)
+	}
+
+	return results, nil
+}
+
+func (t client) multiCommand(cmd string, name Filter, keys ...string) string {
 	buf := &bytes.Buffer{}
 	buf.WriteString(cmd)
 	buf.WriteRune(' ')
@@ -273,7 +235,35 @@ func (t client) groupCommand(cmd string, name Filter, keys ...string) string {
 	return buf.String()
 }
 
-func (t client) sendRecv(cmd string) (string, error) {
+func (t client) sendBlockCommand(cmd string) (map[string]string, error) {
+	resp, err := t.sendCommand(LIST)
+	if err != nil {
+		return nil, err
+	}
+
+	if !strings.HasPrefix(resp, "START") {
+		return nil, errors.Errorf("bloomd: invalid list start '%s' command '%s'", resp, cmd)
+	}
+
+	responses := make(map[string]string)
+
+	split := strings.Split(resp, "\n")
+	for _, line := range split {
+		line := strings.TrimSpace(line)
+
+		switch line {
+		case "START":
+		case "END":
+		case "":
+		default:
+			split := strings.SplitN(line, " ", 2)
+			responses[split[0]] = split[1]
+		}
+	}
+	return responses, nil
+}
+
+func (t client) sendCommand(cmd string) (string, error) {
 
 	conn, err := newConnection(t.addr, t.attempts)
 	if err != nil {
@@ -296,37 +286,35 @@ func (t client) sendRecv(cmd string) (string, error) {
 func newConnection(addr *net.TCPAddr, attempts int) (io.ReadWriteCloser, error) {
 	attempted := 0
 
-CONNECT:
-	conn, err := net.DialTCP("tcp", nil, addr)
-	if err != nil {
-		if attempted > attempts {
+	var conn net.Conn
+	var err error
+	for {
+		conn, err = net.DialTCP("tcp", nil, addr)
+		if err != nil && attempted > attempts {
 			return nil, errors.Wrap(err, "bloomd: unable to establish a connection")
 		}
 		attempted++
-		continue CONNECT
 	}
 
-	return conn, nil //bufio.NewReader(conn), nil
+	return conn, nil
 }
 
 func send(w io.Writer, cmd string, attempts int) error {
 	attempted := 0
 
-WRITE:
-	_, err := w.Write([]byte(cmd + "\n"))
-	if err != nil {
-		if attempted > attempts {
+	for {
+		_, err := w.Write([]byte(cmd + "\n"))
+		if err != nil && attempted > attempts {
 			return errors.Wrap(err, "bloomd: unable to write to connection")
-			return err
 		}
 		attempted++
-		continue WRITE
 	}
 
 	return nil
 }
 
 func recv(r io.Reader) (string, error) {
+	//TODO read block
 	line, err := bufio.NewReader(r).ReadString('\n')
 	if err != nil && err != io.EOF {
 		return line, errors.Wrap(err, "bloomd: unable to read connection")
