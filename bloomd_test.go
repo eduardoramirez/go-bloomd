@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"golang.org/x/net/context"
 	. "gopkg.in/check.v1"
+	"sync"
 	"testing"
 	"time"
 )
@@ -15,10 +16,18 @@ const (
 	TEST_FILTER = "test_filter"
 )
 
-var hostname string
+var (
+	hostname      string
+	multiThread   bool
+	numWorkers    int
+	numIterations int
+)
 
 func init() {
 	flag.StringVar(&hostname, "host", BLOOMD_HOST, "Bloomd Test Host")
+	flag.BoolVar(&multiThread, "test-multi-thread", false, "Enable multi-threaded tests")
+	flag.IntVar(&numWorkers, "multi-thread-threads", 4, "Number of Workers")
+	flag.IntVar(&numIterations, "multi-thread-iterations", 1000, "Number of Iterations")
 }
 
 func Test(t *testing.T) {
@@ -84,4 +93,45 @@ func (s *BloomdSuite) TestGetSetGet(c *C) {
 	}
 
 	c.Assert(s.client.Drop(ctx, TEST_FILTER), IsNil)
+}
+
+func (s *BloomdSuite) TestMultiThread(c *C) {
+	ctx := context.Background()
+	c.Assert(s.client.Create(ctx, TEST_FILTER+"_MULTI"), IsNil)
+
+	cw := make(chan int, numWorkers)
+	ce := make(chan error, numIterations)
+
+	wg := &sync.WaitGroup{}
+	for j := 0; j < numWorkers; j++ {
+		wg.Add(1)
+		go hitBloomd(s.client, wg, cw, ce)
+	}
+
+	for i := 0; i < numWorkers; i++ {
+		cw <- i
+	}
+	close(cw)
+
+	wg.Wait()
+	close(ce)
+
+	// Handle errors
+	for err := range ce {
+		c.Assert(err, IsNil)
+	}
+}
+
+func hitBloomd(client Client, wg *sync.WaitGroup, c chan int, ce chan error) {
+	defer wg.Done()
+
+	ctx := context.Background()
+	for i := range c {
+
+		fmt.Println(i)
+		_, err := client.MultiCheck(ctx, TEST_FILTER+"_MULTI", "test")
+		if err != nil {
+			ce <- err
+		}
+	}
 }
