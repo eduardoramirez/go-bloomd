@@ -16,7 +16,6 @@ import (
 type Filter string
 
 type Client interface {
-	BulkSet(context.Context, Filter, ...string) ([]bool, error)
 	Check(context.Context, Filter, string) (bool, error)
 	Clear(context.Context, Filter) error
 	Close(context.Context, Filter) error
@@ -25,6 +24,7 @@ type Client interface {
 	Flush(context.Context) error
 	List(context.Context) (map[string]string, error)
 	MultiCheck(context.Context, Filter, ...string) ([]bool, error)
+	MultiSet(context.Context, Filter, ...string) ([]bool, error)
 	Set(context.Context, Filter, string) (bool, error)
 	Info(context.Context, Filter) (map[string]string, error)
 	Ping() error
@@ -54,11 +54,11 @@ const (
 )
 
 type client struct {
-	hostname string
-	timeout  time.Duration
-	addr     *net.TCPAddr
-	attempts int
-	hashKeys bool
+	hostname    string
+	timeout     time.Duration
+	addr        *net.TCPAddr
+	maxAttempts int
+	hashKeys    bool
 }
 
 func NewClient(hostname string, hashKeys bool, timeout time.Duration) (Client, error) {
@@ -69,15 +69,16 @@ func NewClient(hostname string, hashKeys bool, timeout time.Duration) (Client, e
 	}
 
 	return &client{
-		hostname: hostname,
-		timeout:  timeout,
-		addr:     addr,
-		hashKeys: hashKeys,
+		hostname:    hostname,
+		timeout:     timeout,
+		addr:        addr,
+		hashKeys:    hashKeys,
+		maxAttempts: 3,
 	}, nil
 }
 
 // Add multi keys to the filter
-func (t client) BulkSet(ctx context.Context, name Filter, keys ...string) ([]bool, error) {
+func (t client) MultiSet(ctx context.Context, name Filter, keys ...string) ([]bool, error) {
 	return t.sendMultiCommand(BULK, name, keys...)
 }
 
@@ -267,13 +268,13 @@ func (t client) sendBlockCommand(cmd string) (map[string]string, error) {
 
 func (t client) sendCommand(cmd string) (string, error) {
 
-	conn, err := newConnection(t.addr, t.attempts)
+	conn, err := newConnection(t.addr, t.maxAttempts)
 	if err != nil {
 		return "", err
 	}
 	defer conn.Close()
 
-	if err := send(conn, cmd, t.attempts); err != nil {
+	if err := send(conn, cmd, t.maxAttempts); err != nil {
 		return "", err
 	}
 
@@ -285,34 +286,35 @@ func (t client) sendCommand(cmd string) (string, error) {
 	return line, nil
 }
 
-func newConnection(addr *net.TCPAddr, attempts int) (io.ReadWriteCloser, error) {
+func newConnection(addr *net.TCPAddr, maxAttempts int) (io.ReadWriteCloser, error) {
 	attempted := 0
 
 	var conn net.Conn
 	var err error
-	for {
+	for attempted < maxAttempts {
 		conn, err = net.DialTCP("tcp", nil, addr)
-		if err != nil && attempted > attempts {
-			return nil, errors.Wrap(err, "bloomd: unable to establish a connection")
+		if err == nil {
+			return conn, nil
 		}
 		attempted++
 	}
 
 	return conn, nil
+	return nil, errors.Wrap(err, "bloomd: unable to establish a connection")
 }
 
-func send(w io.Writer, cmd string, attempts int) error {
+func send(w io.Writer, cmd string, maxAttempts int) error {
 	attempted := 0
 
-	for {
-		_, err := w.Write([]byte(cmd + "\n"))
-		if err != nil && attempted > attempts {
-			return errors.Wrap(err, "bloomd: unable to write to connection")
+	var err error
+	for attempted < maxAttempts {
+		if _, err = w.Write([]byte(cmd + "\n")); err == nil {
+			return nil
 		}
 		attempted++
 	}
 
-	return nil
+	return errors.Wrap(err, "bloomd: unable to write to connection")
 }
 
 func recv(r io.Reader) (string, error) {
