@@ -1,13 +1,13 @@
 package bloomd
 
 import (
+	"bufio"
 	"bytes"
 	"crypto/sha1"
 	"fmt"
 	"github.com/pkg/errors"
 	"golang.org/x/net/context"
 	"io"
-	"io/ioutil"
 	"net"
 	"strings"
 	"time"
@@ -179,7 +179,9 @@ func (t client) Set(ctx context.Context, name Filter, key string) (bool, error) 
 }
 
 func (t client) Ping() error {
-	return errors.New("not implemented")
+	ctx := context.Background()
+	_, err := t.List(ctx)
+	return err
 }
 
 // Returns the key we should send to the server
@@ -267,7 +269,6 @@ func (t client) sendBlockCommand(cmd string) (map[string]string, error) {
 }
 
 func (t client) sendCommand(cmd string) (string, error) {
-
 	conn, err := newConnection(t.addr, t.maxAttempts)
 	if err != nil {
 		return "", err
@@ -294,12 +295,12 @@ func newConnection(addr *net.TCPAddr, maxAttempts int) (io.ReadWriteCloser, erro
 	for attempted < maxAttempts {
 		conn, err = net.DialTCP("tcp", nil, addr)
 		if err == nil {
+			conn.SetReadDeadline(time.Now().Add(time.Second))
 			return conn, nil
 		}
 		attempted++
 	}
 
-	return conn, nil
 	return nil, errors.Wrap(err, "bloomd: unable to establish a connection")
 }
 
@@ -318,9 +319,30 @@ func send(w io.Writer, cmd string, maxAttempts int) error {
 }
 
 func recv(r io.Reader) (string, error) {
-	buf, err := ioutil.ReadAll(r)
-	if err != nil {
-		return "", errors.Wrap(err, "bloomd: unable to read connection")
+	buf := &bytes.Buffer{}
+	rb := bufio.NewReader(r)
+
+	inBlock := false
+	for {
+		str, err := rb.ReadString('\n')
+		if err != nil {
+			return "", errors.Wrap(err, "bloomd: unable to read connection")
+		}
+		str = strings.TrimRight(str, "\n\r")
+
+		buf.WriteString(str)
+
+		if strings.HasPrefix(str, RESPONSE_START) {
+			inBlock = true
+		} else if inBlock {
+			buf.WriteRune('\n')
+			if strings.HasPrefix(str, RESPONSE_END) {
+				break
+			}
+		} else {
+			break
+		}
 	}
-	return strings.TrimRight(string(buf), "\r\n"), nil
+
+	return strings.TrimRight(buf.String(), "\r\n"), nil
 }
