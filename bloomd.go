@@ -49,6 +49,8 @@ const (
 	RESPONSE_EXISTS = "Exists"
 	RESPONSE_YES    = "Yes"
 	RESPONSE_NO     = "No"
+	RESPONSE_START  = "START"
+	RESPONSE_END    = "END"
 )
 
 type client struct {
@@ -86,7 +88,7 @@ func (t client) Check(ctx context.Context, name Filter, key string) (bool, error
 
 // Clears the filter
 func (t client) Clear(ctx context.Context, name Filter) error {
-	return t.sendCommandDone(fmt.Sprintf(DROP, name))
+	return t.sendCommandDone(fmt.Sprintf(CLEAR, name))
 }
 
 // Closes the filter
@@ -241,7 +243,7 @@ func (t client) sendBlockCommand(cmd string) (map[string]string, error) {
 		return nil, err
 	}
 
-	if !strings.HasPrefix(resp, "START") {
+	if !strings.HasPrefix(resp, RESPONSE_START) {
 		return nil, errors.Errorf("bloomd: invalid list start '%s' command '%s'", resp, cmd)
 	}
 
@@ -252,8 +254,8 @@ func (t client) sendBlockCommand(cmd string) (map[string]string, error) {
 		line := strings.TrimSpace(line)
 
 		switch line {
-		case "START":
-		case "END":
+		case RESPONSE_START:
+		case RESPONSE_END:
 		case "":
 		default:
 			split := strings.SplitN(line, " ", 2)
