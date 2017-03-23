@@ -1,13 +1,13 @@
 package bloomd
 
 import (
-	"bufio"
 	"bytes"
 	"crypto/sha1"
 	"fmt"
 	"github.com/pkg/errors"
 	"golang.org/x/net/context"
 	"io"
+	"io/ioutil"
 	"net"
 	"strings"
 	"time"
@@ -316,10 +316,9 @@ func send(w io.Writer, cmd string, attempts int) error {
 }
 
 func recv(r io.Reader) (string, error) {
-	//TODO read block
-	line, err := bufio.NewReader(r).ReadString('\n')
-	if err != nil && err != io.EOF {
+	buf, err := ioutil.ReadAll(r)
+	if err != nil {
 		return line, errors.Wrap(err, "bloomd: unable to read connection")
 	}
-	return strings.TrimRight(line, "\r\n"), nil
+	return strings.TrimRight(string(buf), "\r\n"), nil
 }
