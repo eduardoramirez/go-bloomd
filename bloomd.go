@@ -318,7 +318,7 @@ func send(w io.Writer, cmd string, attempts int) error {
 func recv(r io.Reader) (string, error) {
 	buf, err := ioutil.ReadAll(r)
 	if err != nil {
-		return line, errors.Wrap(err, "bloomd: unable to read connection")
+		return "", errors.Wrap(err, "bloomd: unable to read connection")
 	}
 	return strings.TrimRight(string(buf), "\r\n"), nil
 }
