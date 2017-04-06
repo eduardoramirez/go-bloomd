@@ -96,6 +96,16 @@ func (s *BloomdSuite) TestGetSetGet(c *C) {
 }
 
 func (s *BloomdSuite) TestMultiThread(c *C) {
+	s.testMultiThread(c, s.client)
+}
+
+func (s *BloomdSuite) TestPooledMultiThread(c *C) {
+	pooledClient, err := NewPooledClient(hostname, false, time.Second, 5, 10)
+	c.Assert(err, IsNil)
+	s.testMultiThread(c, pooledClient)
+}
+
+func (s *BloomdSuite) testMultiThread(c *C, client Client) {
 	ctx := context.Background()
 	c.Assert(s.client.Create(ctx, TEST_FILTER+"_MULTI"), IsNil)
 
@@ -126,9 +136,7 @@ func hitBloomd(client Client, wg *sync.WaitGroup, c chan int, ce chan error) {
 	defer wg.Done()
 
 	ctx := context.Background()
-	for i := range c {
-
-		fmt.Println(i)
+	for _ = range c {
 		_, err := client.MultiCheck(ctx, TEST_FILTER+"_MULTI", "test")
 		if err != nil {
 			ce <- err

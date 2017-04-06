@@ -250,15 +250,25 @@ func (t client) sendBlockCommand(ctx context.Context, cmd string) (map[string]st
 	responses := make(map[string]string)
 
 	split := strings.Split(resp, "\n")
+
+	inStart := false
 	for _, line := range split {
 		line := strings.TrimSpace(line)
 
-		switch line {
-		case RESPONSE_START:
-		case RESPONSE_END:
-		case "":
-		default:
+		if strings.HasPrefix(line, RESPONSE_START) {
+			inStart = true
+		}
+
+		if strings.HasPrefix(line, RESPONSE_END) {
+			inStart = false
+			break
+		}
+
+		if inStart && line != "" {
 			split := strings.SplitN(line, " ", 2)
+			if len(split) != 2 {
+				continue
+			}
 			responses[split[0]] = split[1]
 		}
 	}
@@ -266,22 +276,47 @@ func (t client) sendBlockCommand(ctx context.Context, cmd string) (map[string]st
 }
 
 func (t client) sendCommand(ctx context.Context, cmd string) (string, error) {
-	conn, err := t.pool.Get()
-	if err != nil {
-		return "", err
-	}
-	defer conn.Close()
+	var conn net.Conn
+	var err error
 
-	if err := send(conn, cmd, t.maxAttempts); err != nil {
-		return "", checkConnectionError(conn, err)
-	}
+	var line string
+	ch := make(chan error, 1)
 
-	line, err := recv(conn)
-	if err != nil {
-		return "", checkConnectionError(conn, err)
-	}
+	var cancel context.CancelFunc
+	ctx, cancel = context.WithTimeout(ctx, t.timeout)
+	defer cancel()
 
-	return line, nil
+	go func() {
+		ch <- func() error {
+			conn, err = t.pool.Get()
+			if err != nil {
+				return err
+			}
+			defer conn.Close()
+
+			if err = send(conn, cmd, t.maxAttempts); err != nil {
+				return checkConnectionError(conn, err)
+			}
+
+			line, err = recv(conn)
+			if err != nil {
+				return checkConnectionError(conn, err)
+			}
+
+			return nil
+		}()
+	}()
+
+	select {
+	case err := <-ch:
+		if err != nil {
+			return "", checkConnectionError(conn, err)
+		}
+		return line, nil
+
+	case <-ctx.Done():
+		return "", checkConnectionError(conn, ctx.Err())
+	}
 }
 
 func send(w io.Writer, cmd string, maxAttempts int) error {
@@ -328,6 +363,10 @@ func recv(r io.Reader) (string, error) {
 }
 
 func checkConnectionError(conn net.Conn, err error) error {
+	if conn == nil {
+		return err
+	}
+
 	if pconn, ok := conn.(*pool.PoolConn); ok {
 		pconn.MarkUnusable()
 	}
