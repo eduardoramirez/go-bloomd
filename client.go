@@ -72,7 +72,7 @@ func NewPooledClient(hostname string, hashKeys bool, timeout time.Duration, init
 
 // Add multi keys to the filter
 func (t client) MultiSet(ctx context.Context, name Filter, keys ...string) ([]bool, error) {
-	return t.sendMultiCommand(BULK, name, keys...)
+	return t.sendMultiCommand(ctx, BULK, name, keys...)
 }
 
 // Check if key exists in filter
@@ -82,12 +82,12 @@ func (t client) Check(ctx context.Context, name Filter, key string) (bool, error
 
 // Clears the filter
 func (t client) Clear(ctx context.Context, name Filter) error {
-	return t.sendCommandDone(fmt.Sprintf(CLEAR, name))
+	return t.sendCommandDone(ctx, fmt.Sprintf(CLEAR, name))
 }
 
 // Closes the filter
 func (t client) Close(ctx context.Context, name Filter) error {
-	return t.sendCommandDone(fmt.Sprintf(CLOSE, name))
+	return t.sendCommandDone(ctx, fmt.Sprintf(CLOSE, name))
 }
 
 // Creates new fiter
@@ -112,7 +112,7 @@ func (t client) CreateWithParams(ctx context.Context, name Filter, capacity int,
 		cmd = fmt.Sprintf(CREATE_INMEM, cmd)
 	}
 
-	resp, err := t.sendCommand(cmd)
+	resp, err := t.sendCommand(ctx, cmd)
 	if err != nil {
 		return err
 	}
@@ -131,32 +131,32 @@ func (t client) CreateWithParams(ctx context.Context, name Filter, capacity int,
 
 // Permanently deletes filter
 func (t client) Drop(ctx context.Context, name Filter) error {
-	return t.sendCommandDone(fmt.Sprintf(DROP, name))
+	return t.sendCommandDone(ctx, fmt.Sprintf(DROP, name))
 }
 
 // Flush to disk
 func (t client) Flush(ctx context.Context) error {
-	return t.sendCommandDone(FLUSH)
+	return t.sendCommandDone(ctx, FLUSH)
 }
 
 func (t client) Info(ctx context.Context, name Filter) (map[string]string, error) {
-	return t.sendBlockCommand(fmt.Sprintf(INFO, name))
+	return t.sendBlockCommand(ctx, fmt.Sprintf(INFO, name))
 }
 
 // List filters
 func (t client) List(ctx context.Context) (map[string]string, error) {
-	return t.sendBlockCommand(LIST)
+	return t.sendBlockCommand(ctx, LIST)
 }
 
 // Checks whether multiple keys exist in the filter
 func (t client) MultiCheck(ctx context.Context, name Filter, keys ...string) ([]bool, error) {
-	return t.sendMultiCommand(MULTI, name, keys...)
+	return t.sendMultiCommand(ctx, MULTI, name, keys...)
 }
 
 // Add new key to filter
 func (t client) Set(ctx context.Context, name Filter, key string) (bool, error) {
 	cmd := fmt.Sprintf(SET, name, t.hashKey(key))
-	resp, err := t.sendCommand(cmd)
+	resp, err := t.sendCommand(ctx, cmd)
 	if err != nil {
 		return false, err
 	}
@@ -191,8 +191,8 @@ func (t client) hashKey(key string) string {
 	return key
 }
 
-func (t client) sendCommandDone(cmd string) error {
-	resp, err := t.sendCommand(cmd)
+func (t client) sendCommandDone(ctx context.Context, cmd string) error {
+	resp, err := t.sendCommand(ctx, cmd)
 	if err != nil {
 		return errors.Wrapf(err, "bloomd: error with command '%s'", cmd)
 	}
@@ -204,10 +204,10 @@ func (t client) sendCommandDone(cmd string) error {
 	return nil
 }
 
-func (t client) sendMultiCommand(c string, name Filter, keys ...string) ([]bool, error) {
-	cmd := t.multiCommand(c, name, keys...)
+func (t client) sendMultiCommand(ctx context.Context, c string, name Filter, keys ...string) ([]bool, error) {
+	cmd := t.buildMultiCommand(c, name, keys...)
 
-	resp, err := t.sendCommand(cmd)
+	resp, err := t.sendCommand(ctx, cmd)
 	if err != nil {
 		return nil, errors.Wrapf(err, "bloomd: error with multi command '%s'", cmd)
 	}
@@ -225,7 +225,7 @@ func (t client) sendMultiCommand(c string, name Filter, keys ...string) ([]bool,
 	return results, nil
 }
 
-func (t client) multiCommand(cmd string, name Filter, keys ...string) string {
+func (t client) buildMultiCommand(cmd string, name Filter, keys ...string) string {
 	buf := &bytes.Buffer{}
 	buf.WriteString(cmd)
 	buf.WriteRune(' ')
@@ -237,8 +237,8 @@ func (t client) multiCommand(cmd string, name Filter, keys ...string) string {
 	return buf.String()
 }
 
-func (t client) sendBlockCommand(cmd string) (map[string]string, error) {
-	resp, err := t.sendCommand(LIST)
+func (t client) sendBlockCommand(ctx context.Context, cmd string) (map[string]string, error) {
+	resp, err := t.sendCommand(ctx, LIST)
 	if err != nil {
 		return nil, err
 	}
@@ -265,7 +265,7 @@ func (t client) sendBlockCommand(cmd string) (map[string]string, error) {
 	return responses, nil
 }
 
-func (t client) sendCommand(cmd string) (string, error) {
+func (t client) sendCommand(ctx context.Context, cmd string) (string, error) {
 	conn, err := t.pool.Get()
 	if err != nil {
 		return "", err
