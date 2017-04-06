@@ -27,7 +27,7 @@ func init() {
 	flag.StringVar(&hostname, "host", BLOOMD_HOST, "Bloomd Test Host")
 	flag.BoolVar(&multiThread, "test-multi-thread", false, "Enable multi-threaded tests")
 	flag.IntVar(&numWorkers, "multi-thread-threads", 4, "Number of Workers")
-	flag.IntVar(&numIterations, "multi-thread-iterations", 1000, "Number of Iterations")
+	flag.IntVar(&numIterations, "multi-thread-iterations", 1000000, "Number of Iterations")
 }
 
 func Test(t *testing.T) {
@@ -95,30 +95,56 @@ func (s *BloomdSuite) TestGetSetGet(c *C) {
 	c.Assert(s.client.Drop(ctx, TEST_FILTER), IsNil)
 }
 
-func (s *BloomdSuite) TestMultiThread(c *C) {
-	s.testMultiThread(c, s.client)
+func (s *BloomdSuite) BenchmarkSingleClient(c *C) {
+	s.benchmarkClient(c, s.client)
 }
 
-func (s *BloomdSuite) TestPooledMultiThread(c *C) {
+func (s *BloomdSuite) BenchmarkPooledClient(c *C) {
 	pooledClient, err := NewPooledClient(hostname, false, time.Second, 5, 10)
 	c.Assert(err, IsNil)
-	s.testMultiThread(c, pooledClient)
+	s.benchmarkClient(c, pooledClient)
 }
 
-func (s *BloomdSuite) testMultiThread(c *C, client Client) {
+func (s *BloomdSuite) benchmarkClient(c *C, client Client) {
 	ctx := context.Background()
-	c.Assert(s.client.Create(ctx, TEST_FILTER+"_MULTI"), IsNil)
+
+	filter := Filter(TEST_FILTER + "_SINGLE")
+
+	c.Assert(client.Create(ctx, filter), IsNil)
+
+	for i := 0; i < c.N; i++ {
+		_, err := client.MultiCheck(ctx, filter, "test")
+		c.Assert(err, IsNil)
+	}
+}
+
+func (s *BloomdSuite) BenchmarkMultiThread(c *C) {
+	s.benchmarkMultiThread(c, s.client)
+}
+
+func (s *BloomdSuite) BenchmarkPooledMultiThread(c *C) {
+	pooledClient, err := NewPooledClient(hostname, false, time.Second, 5, 10)
+	c.Assert(err, IsNil)
+	s.benchmarkMultiThread(c, pooledClient)
+}
+
+func (s *BloomdSuite) benchmarkMultiThread(c *C, client Client) {
+	ctx := context.Background()
+
+	filter := Filter(TEST_FILTER + "_MULTI")
+
+	c.Assert(client.Create(ctx, filter), IsNil)
 
 	cw := make(chan int, numWorkers)
-	ce := make(chan error, numIterations)
+	ce := make(chan error, c.N)
 
 	wg := &sync.WaitGroup{}
 	for j := 0; j < numWorkers; j++ {
 		wg.Add(1)
-		go hitBloomd(s.client, wg, cw, ce)
+		go hitBloomd(client, filter, wg, cw, ce)
 	}
 
-	for i := 0; i < numWorkers; i++ {
+	for i := 0; i < c.N; i++ {
 		cw <- i
 	}
 	close(cw)
@@ -132,12 +158,12 @@ func (s *BloomdSuite) testMultiThread(c *C, client Client) {
 	}
 }
 
-func hitBloomd(client Client, wg *sync.WaitGroup, c chan int, ce chan error) {
+func hitBloomd(client Client, filter Filter, wg *sync.WaitGroup, c chan int, ce chan error) {
 	defer wg.Done()
 
-	ctx := context.Background()
 	for _ = range c {
-		_, err := client.MultiCheck(ctx, TEST_FILTER+"_MULTI", "test")
+		ctx := context.Background()
+		_, err := client.MultiCheck(ctx, filter, "test")
 		if err != nil {
 			ce <- err
 		}
