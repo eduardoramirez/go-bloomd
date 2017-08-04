@@ -185,8 +185,8 @@ func (t client) Ping() error {
 func (t client) hashKey(key string) string {
 	if t.hashKeys {
 		h := sha1.New()
-		s := h.Sum([]byte(key))
-		return fmt.Sprintf("%x", s)
+		io.WriteString(h, key)
+		return fmt.Sprintf("%x", h.Sum(nil))
 	}
 	return key
 }
