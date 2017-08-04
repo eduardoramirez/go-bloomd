@@ -165,7 +165,7 @@ func (t client) Set(ctx context.Context, name Filter, key string) (bool, error) 
 	case RESPONSE_YES:
 		return true, nil
 	case RESPONSE_NO:
-		return true, nil
+		return false, nil
 	default:
 		return false, errors.Errorf("Invalid response '%s'", resp)
 	}
