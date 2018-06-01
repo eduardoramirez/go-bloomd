@@ -14,23 +14,8 @@ import (
 	pool "gopkg.in/fatih/pool.v2"
 )
 
+// A wrapper type for a bloomD filter name.
 type Filter string
-
-type Client interface {
-	Bulk(context.Context, Filter, ...string) ([]bool, error)
-	Check(context.Context, Filter, string) (bool, error)
-	Clear(context.Context, Filter) error
-	Close(context.Context, Filter) error
-	Create(context.Context, Filter) error
-	Drop(context.Context, Filter) error
-	Flush(context.Context) error
-	Info(context.Context, Filter) (map[string]string, error)
-	Multi(context.Context, Filter, ...string) ([]bool, error)
-	List(context.Context) (map[string]string, error)
-	Set(context.Context, Filter, string) (bool, error)
-	Shutdown()
-	Ping() error
-}
 
 const (
 	defaultInitialConnections = 5
@@ -67,7 +52,8 @@ type channelPool interface {
 	Close()
 }
 
-type client struct {
+// Client is represention of a configured client to a bloomD server.
+type Client struct {
 	pool        channelPool
 	hostname    string
 	timeout     time.Duration
@@ -75,7 +61,9 @@ type client struct {
 	hashKeys    bool
 }
 
-func NewClient(hostname string, opts ...Option) (*client, error) {
+// NewClient returns a new bloomD client configured according to the options
+// or using the default settings.
+func NewClient(hostname string, opts ...Option) (*Client, error) {
 	o := evaluateOptions(opts)
 
 	pool, err := pool.NewChannelPool(o.initialConnections, o.maxConnections, func() (net.Conn, error) {
@@ -86,7 +74,7 @@ func NewClient(hostname string, opts ...Option) (*client, error) {
 		return nil, errors.Wrap(err, "Unable to create bloomd connection")
 	}
 
-	return &client{
+	return &Client{
 		pool:        pool,
 		hostname:    hostname,
 		timeout:     o.timeout,
@@ -95,33 +83,33 @@ func NewClient(hostname string, opts ...Option) (*client, error) {
 	}, nil
 }
 
-// Add new key to filter
-func (t client) Set(ctx context.Context, name Filter, key string) (bool, error) {
+// Set sets a key in a filter.
+func (t *Client) Set(ctx context.Context, name Filter, key string) (bool, error) {
 	return t.sendSingleCommand(ctx, _SET, name, key)
 }
 
-// Add multiple keys in the filter
-func (t client) Bulk(ctx context.Context, name Filter, keys ...string) ([]bool, error) {
+// Bulk sets many items in a filter at once.
+func (t *Client) Bulk(ctx context.Context, name Filter, keys ...string) ([]bool, error) {
 	return t.sendMultiCommand(ctx, _BULK, name, keys...)
 }
 
-// Check if key exists in filter
-func (t client) Check(ctx context.Context, name Filter, key string) (bool, error) {
+// Check checks if a key is in a filter.
+func (t *Client) Check(ctx context.Context, name Filter, key string) (bool, error) {
 	return t.sendSingleCommand(ctx, _CHECK, name, key)
 }
 
-// Checks whether multiple keys exist in the filter
-func (t client) Multi(ctx context.Context, name Filter, keys ...string) ([]bool, error) {
+// Multi checks whether multiple keys exist in the filter.
+func (t *Client) Multi(ctx context.Context, name Filter, keys ...string) ([]bool, error) {
 	return t.sendMultiCommand(ctx, _MULTI, name, keys...)
 }
 
-// Creates new fiter
-func (t client) Create(ctx context.Context, name Filter) error {
+// Create a new filter (a filter is a named bloom filter).
+func (t *Client) Create(ctx context.Context, name Filter) error {
 	return t.CreateWithParams(ctx, name, 0, 0, false)
 }
 
-// Creates new fiter with additional params
-func (t client) CreateWithParams(ctx context.Context, name Filter, capacity int, probability float64, inMemory bool) error {
+// CreateWithParams creates a new filter with the given properties.
+func (t *Client) CreateWithParams(ctx context.Context, name Filter, capacity int, probability float64, inMemory bool) error {
 	if probability > 0 && capacity < 1 {
 		return errors.New("invalid capacity/probability")
 	}
@@ -154,48 +142,52 @@ func (t client) CreateWithParams(ctx context.Context, name Filter, capacity int,
 	}
 }
 
-// Retrieves information about the specified filter
-func (t client) Info(ctx context.Context, name Filter) (map[string]string, error) {
+// Info retrieves information about the specified filter.
+func (t *Client) Info(ctx context.Context, name Filter) (map[string]string, error) {
 	return t.sendBlockCommand(ctx, fmt.Sprintf(_INFO, name))
 }
 
-// Permanently deletes filter
-func (t client) Drop(ctx context.Context, name Filter) error {
+// Drop permanently deletes filter.
+func (t *Client) Drop(ctx context.Context, name Filter) error {
 	return t.sendDoneCommand(ctx, fmt.Sprintf(_DROP, name))
 }
 
-// Clears the filter
-func (t client) Clear(ctx context.Context, name Filter) error {
+// Clear removes a filter from memory but retains it in disk.
+func (t *Client) Clear(ctx context.Context, name Filter) error {
 	return t.sendDoneCommand(ctx, fmt.Sprintf(_CLEAR, name))
 }
 
-// Closes the filter
-func (t client) Close(ctx context.Context, name Filter) error {
+// Close closes a filter (Unmaps from memory, but still accessible).
+func (t *Client) Close(ctx context.Context, name Filter) error {
 	return t.sendDoneCommand(ctx, fmt.Sprintf(_CLOSE, name))
 }
 
-// Lists all filters
-func (t client) List(ctx context.Context) (map[string]string, error) {
+// List lists all filters.
+func (t *Client) List(ctx context.Context) (map[string]string, error) {
+	// TODO (eduardo): support prefix matching
 	return t.sendBlockCommand(ctx, _LIST)
 }
 
-// Flushes filters to disk
-func (t client) Flush(ctx context.Context) error {
+// Flush flushes all filters to disk or just a specified one.
+func (t *Client) Flush(ctx context.Context) error {
+	// TODO (eduardo): support specifying a filter
 	return t.sendDoneCommand(ctx, _FLUSH)
 }
 
-func (t client) Shutdown() {
+// Shutdown closes every connection in the pool.
+func (t *Client) Shutdown() {
 	t.pool.Close()
 }
 
-func (t client) Ping() error {
+// Ping hits bloomD and returns an error or nil.
+func (t *Client) Ping() error {
 	ctx := context.Background()
 	_, err := t.List(ctx)
 	return err
 }
 
-// Returns the key we should send to the server
-func (t client) hashKey(key string) string {
+// Returns the key the client will send to the server, maybe hashing it.
+func (t *Client) hashKey(key string) string {
 	if t.hashKeys {
 		h := sha1.New()
 		io.WriteString(h, key)
@@ -204,7 +196,9 @@ func (t client) hashKey(key string) string {
 	return key
 }
 
-func (t client) sendDoneCommand(ctx context.Context, cmd string) error {
+// sendDoneCommand sends the command to bloomD. Returns an error if the
+// reply was malformed.
+func (t *Client) sendDoneCommand(ctx context.Context, cmd string) error {
 	resp, err := t.sendCommand(ctx, cmd)
 	if err != nil {
 		return errors.Wrapf(err, "bloomd: error with command '%s'", cmd)
@@ -217,7 +211,8 @@ func (t client) sendDoneCommand(ctx context.Context, cmd string) error {
 	return nil
 }
 
-func (t client) sendSingleCommand(ctx context.Context, c string, name Filter, key string) (bool, error) {
+// sendSingleCommand builds and sends the command to bloomD. Returns the response as a boolean.
+func (t *Client) sendSingleCommand(ctx context.Context, c string, name Filter, key string) (bool, error) {
 	cmd := t.buildCommand(c, name, key)
 
 	resp, err := t.sendCommand(ctx, cmd)
@@ -237,7 +232,8 @@ func (t client) sendSingleCommand(ctx context.Context, c string, name Filter, ke
 	}
 }
 
-func (t client) sendMultiCommand(ctx context.Context, c string, name Filter, keys ...string) ([]bool, error) {
+// sendSingleCommand builds and sends the command to bloomD. Returns the response as a list of booleans.
+func (t *Client) sendMultiCommand(ctx context.Context, c string, name Filter, keys ...string) ([]bool, error) {
 	cmd := t.buildCommand(c, name, keys...)
 
 	resp, err := t.sendCommand(ctx, cmd)
@@ -257,7 +253,8 @@ func (t client) sendMultiCommand(ctx context.Context, c string, name Filter, key
 	return results, nil
 }
 
-func (t client) sendBlockCommand(ctx context.Context, cmd string) (map[string]string, error) {
+// sendBlockCommand sends the command to bloomD. Returns the response key value pairs.
+func (t *Client) sendBlockCommand(ctx context.Context, cmd string) (map[string]string, error) {
 	resp, err := t.sendCommand(ctx, cmd)
 	if err != nil {
 		return nil, err
@@ -273,10 +270,11 @@ func (t client) sendBlockCommand(ctx context.Context, cmd string) (map[string]st
 			responses[split[0]] = split[1]
 		}
 	}
+
 	return responses, nil
 }
 
-func (t client) buildCommand(cmd string, name Filter, keys ...string) string {
+func (t *Client) buildCommand(cmd string, name Filter, keys ...string) string {
 	bldr := &strings.Builder{}
 	bldr.WriteString(cmd)
 	bldr.WriteRune(' ')
@@ -288,7 +286,8 @@ func (t client) buildCommand(cmd string, name Filter, keys ...string) string {
 	return bldr.String()
 }
 
-func (t client) sendCommand(ctx context.Context, cmd string) (string, error) {
+// sendCommand sends the command asynchronously to bloomD. Returns the parsed response.
+func (t *Client) sendCommand(ctx context.Context, cmd string) (string, error) {
 	var conn net.Conn
 	var err error
 	var line string
@@ -331,6 +330,7 @@ func (t client) sendCommand(ctx context.Context, cmd string) (string, error) {
 	}
 }
 
+// send writes the request to bloomD. Retrying as necessary.
 func send(w io.Writer, cmd string, maxAttempts int) error {
 	attempted := 0
 
@@ -345,6 +345,7 @@ func send(w io.Writer, cmd string, maxAttempts int) error {
 	return errors.Wrap(err, "bloomd: unable to write to connection")
 }
 
+// recv retrieves the response from bloomD and parses it.
 func recv(r io.Reader) (string, error) {
 	bldr := &strings.Builder{}
 	reader := bufio.NewReader(r)
@@ -383,5 +384,6 @@ func checkConnectionError(conn net.Conn, err error) error {
 	if pconn, ok := conn.(*pool.PoolConn); ok {
 		pconn.MarkUnusable()
 	}
+
 	return err
 }
