@@ -37,9 +37,9 @@ import (
 )
 
 func ExampleNewClient() {
-	client := bloomd.NewClient("localhost:8673", bloomd.WithHashKeys(true), bloomd.WithMaxAttempts(5))
+  client := bloomd.NewClient("localhost:8673", bloomd.WithHashKeys(true), bloomd.WithMaxAttempts(5))
 
-	err := client.Ping()
+  err := client.Ping()
   if err != nil {
     panic(err)
   }
