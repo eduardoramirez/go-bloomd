@@ -72,7 +72,7 @@ func TestGetSetGet(t *testing.T) {
 		"test-5",
 	}
 
-	r1, err := client.MultiCheck(ctx, testFilter1, keys...)
+	r1, err := client.Multi(ctx, testFilter1, keys...)
 	assert.NoError(err)
 	for i := 0; i < len(r1); i++ {
 		assert.Equal(false, r1[i])
@@ -84,7 +84,7 @@ func TestGetSetGet(t *testing.T) {
 		assert.Equal(true, r2[i])
 	}
 
-	r3, err := client.MultiCheck(ctx, testFilter1, keys...)
+	r3, err := client.Multi(ctx, testFilter1, keys...)
 	assert.NoError(err)
 	for i := 0; i < len(r3); i++ {
 		assert.Equal(i%2 == 0, r3[i])
