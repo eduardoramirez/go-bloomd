@@ -17,6 +17,7 @@ var defaultOptions = &options{
 	hashKeys:           defaultHashKeys,
 	maxAttempts:        defaultMaxAttempts,
 	maxConnections:     defaultMaxConnections,
+	timeout:            defaultTimeout,
 }
 
 func evaluateOptions(opts []Option) *options {
@@ -28,9 +29,15 @@ func evaluateOptions(opts []Option) *options {
 	return optCopy
 }
 
-func WithTimeout(timeout time.Duration) Option {
+func WithHashKeys(hashKeys bool) Option {
 	return func(o *options) {
-		o.timeout = timeout
+		o.hashKeys = hashKeys
+	}
+}
+
+func WithInitialConnections(initialConnections int) Option {
+	return func(o *options) {
+		o.initialConnections = initialConnections
 	}
 }
 
@@ -40,8 +47,14 @@ func WithMaxAttempts(maxAttempts int) Option {
 	}
 }
 
-func WithHashKeys(hashKeys bool) Option {
+func WithMaxConnections(maxConnections int) Option {
 	return func(o *options) {
-		o.hashKeys = hashKeys
+		o.maxConnections = maxConnections
+	}
+}
+
+func WithTimeout(timeout time.Duration) Option {
+	return func(o *options) {
+		o.timeout = timeout
 	}
 }

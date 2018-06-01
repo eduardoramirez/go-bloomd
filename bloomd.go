@@ -11,7 +11,7 @@ import (
 	"time"
 
 	"github.com/pkg/errors"
-	"gopkg.in/fatih/pool.v2"
+	pool "gopkg.in/fatih/pool.v2"
 )
 
 type Filter string
@@ -37,6 +37,7 @@ const (
 	defaultHashKeys           = false
 	defaultMaxAttempts        = 3
 	defaultMaxConnections     = 10
+	defaultTimeout            = time.Second * 10
 
 	_FLUSH           = "flush"
 	_LIST            = "list"
@@ -61,8 +62,13 @@ const (
 	_RESPONSE_END    = "END"
 )
 
+type channelPool interface {
+	Get() (net.Conn, error)
+	Close()
+}
+
 type client struct {
-	pool        pool.Pool
+	pool        channelPool
 	hostname    string
 	timeout     time.Duration
 	maxAttempts int
@@ -155,17 +161,17 @@ func (t client) Info(ctx context.Context, name Filter) (map[string]string, error
 
 // Permanently deletes filter
 func (t client) Drop(ctx context.Context, name Filter) error {
-	return t.sendCommandDone(ctx, fmt.Sprintf(_DROP, name))
+	return t.sendDoneCommand(ctx, fmt.Sprintf(_DROP, name))
 }
 
 // Clears the filter
 func (t client) Clear(ctx context.Context, name Filter) error {
-	return t.sendCommandDone(ctx, fmt.Sprintf(_CLEAR, name))
+	return t.sendDoneCommand(ctx, fmt.Sprintf(_CLEAR, name))
 }
 
 // Closes the filter
 func (t client) Close(ctx context.Context, name Filter) error {
-	return t.sendCommandDone(ctx, fmt.Sprintf(_CLOSE, name))
+	return t.sendDoneCommand(ctx, fmt.Sprintf(_CLOSE, name))
 }
 
 // Lists all filters
@@ -175,7 +181,7 @@ func (t client) List(ctx context.Context) (map[string]string, error) {
 
 // Flushes filters to disk
 func (t client) Flush(ctx context.Context) error {
-	return t.sendCommandDone(ctx, _FLUSH)
+	return t.sendDoneCommand(ctx, _FLUSH)
 }
 
 func (t client) Shutdown() {
@@ -198,7 +204,7 @@ func (t client) hashKey(key string) string {
 	return key
 }
 
-func (t client) sendCommandDone(ctx context.Context, cmd string) error {
+func (t client) sendDoneCommand(ctx context.Context, cmd string) error {
 	resp, err := t.sendCommand(ctx, cmd)
 	if err != nil {
 		return errors.Wrapf(err, "bloomd: error with command '%s'", cmd)
@@ -244,12 +250,30 @@ func (t client) sendMultiCommand(ctx context.Context, c string, name Filter, key
 	}
 
 	results := make([]bool, 0, len(keys))
-	responses := strings.Split(resp, " ")
-	for _, r := range responses {
+	for _, r := range strings.Split(resp, " ") {
 		results = append(results, r == _RESPONSE_YES)
 	}
 
 	return results, nil
+}
+
+func (t client) sendBlockCommand(ctx context.Context, cmd string) (map[string]string, error) {
+	resp, err := t.sendCommand(ctx, cmd)
+	if err != nil {
+		return nil, err
+	}
+
+	responses := make(map[string]string)
+	for _, line := range strings.Split(resp, "\n") {
+		if line := strings.TrimSpace(line); line != "" {
+			split := strings.SplitN(line, " ", 2)
+			if len(split) != 2 {
+				continue
+			}
+			responses[split[0]] = split[1]
+		}
+	}
+	return responses, nil
 }
 
 func (t client) buildCommand(cmd string, name Filter, keys ...string) string {
@@ -262,44 +286,6 @@ func (t client) buildCommand(cmd string, name Filter, keys ...string) string {
 		bldr.WriteString(t.hashKey(key))
 	}
 	return bldr.String()
-}
-
-func (t client) sendBlockCommand(ctx context.Context, cmd string) (map[string]string, error) {
-	resp, err := t.sendCommand(ctx, cmd)
-	if err != nil {
-		return nil, err
-	}
-
-	if !strings.HasPrefix(resp, _RESPONSE_START) {
-		return nil, errors.Errorf("bloomd: invalid list start '%s' command '%s'", resp, cmd)
-	}
-
-	responses := make(map[string]string)
-
-	split := strings.Split(resp, "\n")
-
-	inStart := false
-	for _, line := range split {
-		line := strings.TrimSpace(line)
-
-		if strings.HasPrefix(line, _RESPONSE_START) {
-			inStart = true
-		}
-
-		if strings.HasPrefix(line, _RESPONSE_END) {
-			inStart = false
-			break
-		}
-
-		if inStart && line != "" {
-			split := strings.SplitN(line, " ", 2)
-			if len(split) != 2 {
-				continue
-			}
-			responses[split[0]] = split[1]
-		}
-	}
-	return responses, nil
 }
 
 func (t client) sendCommand(ctx context.Context, cmd string) (string, error) {
@@ -361,28 +347,29 @@ func send(w io.Writer, cmd string, maxAttempts int) error {
 
 func recv(r io.Reader) (string, error) {
 	bldr := &strings.Builder{}
-	rb := bufio.NewReader(r)
+	reader := bufio.NewReader(r)
 
-	inBlock := false
-	for {
-		str, err := rb.ReadString('\n')
-		if err != nil {
-			return "", errors.Wrap(err, "bloomd: unable to read connection")
-		}
-		str = strings.TrimRight(str, "\n\r")
+	txt, err := reader.ReadString('\n')
+	if err != nil {
+		return "", errors.Wrap(err, "bloomd: unable to read connection")
+	}
 
-		bldr.WriteString(str)
-
-		if strings.HasPrefix(str, _RESPONSE_START) {
-			inBlock = true
-		} else if inBlock {
-			bldr.WriteRune('\n')
-			if strings.HasPrefix(str, _RESPONSE_END) {
-				break
+	if strings.HasPrefix(txt, _RESPONSE_START) {
+		for {
+			blockTxt, err := reader.ReadString('\n')
+			if err != nil {
+				return "", errors.Wrap(err, "bloomd: unable to read connection")
 			}
-		} else {
-			break
+
+			if strings.HasPrefix(blockTxt, _RESPONSE_END) {
+				break
+			} else {
+				bldr.WriteString(blockTxt)
+				bldr.WriteRune('\n')
+			}
 		}
+	} else {
+		bldr.WriteString(txt)
 	}
 
 	return strings.TrimRight(bldr.String(), "\r\n"), nil
