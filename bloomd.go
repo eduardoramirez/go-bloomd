@@ -17,17 +17,17 @@ import (
 type Filter string
 
 type Client interface {
+	Bulk(context.Context, Filter, ...string) ([]bool, error)
 	Check(context.Context, Filter, string) (bool, error)
 	Clear(context.Context, Filter) error
 	Close(context.Context, Filter) error
 	Create(context.Context, Filter) error
 	Drop(context.Context, Filter) error
 	Flush(context.Context) error
-	List(context.Context) (map[string]string, error)
-	MultiCheck(context.Context, Filter, ...string) ([]bool, error)
-	MultiSet(context.Context, Filter, ...string) ([]bool, error)
-	Set(context.Context, Filter, string) (bool, error)
 	Info(context.Context, Filter) (map[string]string, error)
+	Multi(context.Context, Filter, ...string) ([]bool, error)
+	List(context.Context) (map[string]string, error)
+	Set(context.Context, Filter, string) (bool, error)
 	Shutdown()
 	Ping() error
 }
@@ -111,7 +111,7 @@ func (t client) Check(ctx context.Context, name Filter, key string) (bool, error
 }
 
 // Checks whether multiple keys exist in the filter
-func (t client) MultiCheck(ctx context.Context, name Filter, keys ...string) ([]bool, error) {
+func (t client) Multi(ctx context.Context, name Filter, keys ...string) ([]bool, error) {
 	return t.sendMultiCommand(ctx, _MULTI, name, keys...)
 }
 
