@@ -78,6 +78,14 @@ A number of config options are available for the client:
 * ```maxAttempts```: The number of retries when communicating to bloomD. Defaults to 3.
 * ```timeout```: How long to wait for bloomD to reply before returning an error. Defaults to 10 seconds.
 
+## Test
+
+Requires `bloomd`. To install, follow the directions on https://github.com/armon/bloomd.
+
+```go
+go test
+```
+
 ## Credits
 
  * Forked from [go-bloomd](https://github.com/sjhitchner/go-bloomd) by [Stephen Hitchner](https://github.com/sjhitchner)
