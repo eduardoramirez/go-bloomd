@@ -14,9 +14,6 @@ import (
 	pool "gopkg.in/fatih/pool.v2"
 )
 
-// A wrapper type for a bloomD filter name.
-type Filter string
-
 const (
 	defaultInitialConnections = 5
 	defaultHashKeys           = false
@@ -24,8 +21,11 @@ const (
 	defaultMaxConnections     = 10
 	defaultTimeout            = time.Second * 10
 
-	_FLUSH           = "flush"
-	_LIST            = "list"
+	// Valid bloomD commands
+	_FLUSH_ALL       = "flush"
+	_FLUSH           = "flush %s"
+	_LIST_ALL        = "list"
+	_LIST            = "list %s"
 	_CHECK           = "c"
 	_CREATE          = "create %s"
 	_CREATE_CAPACITY = "%s capacity=%d"
@@ -39,12 +39,19 @@ const (
 	_SET             = "s"
 	_INFO            = "info %s"
 
-	_RESPONSE_DONE   = "Done"
-	_RESPONSE_EXISTS = "Exists"
-	_RESPONSE_YES    = "Yes"
-	_RESPONSE_NO     = "No"
-	_RESPONSE_START  = "START"
-	_RESPONSE_END    = "END"
+	// Raw bloomD commands
+	_CMD_CLEAR = "clear"
+
+	// Valid bloomD responses
+	_RESPONSE_DONE               = "Done"
+	_RESPONSE_EXISTS             = "Exists"
+	_RESPONSE_DELETE_IN_PROG     = "Delete in progress"
+	_RESPONSE_FILTER_NOT_EXIST   = "Filter does not exist"
+	_RESPONSE_FILTER_NOT_PROXIED = "Filter is not proxied. Close it first."
+	_RESPONSE_YES                = "Yes"
+	_RESPONSE_NO                 = "No"
+	_RESPONSE_START              = "START"
+	_RESPONSE_END                = "END"
 )
 
 type channelPool interface {
@@ -84,34 +91,34 @@ func NewClient(hostname string, opts ...Option) (*Client, error) {
 }
 
 // Set sets a key in a filter.
-func (t *Client) Set(ctx context.Context, name Filter, key string) (bool, error) {
+func (t *Client) Set(ctx context.Context, name string, key string) (bool, error) {
 	return t.sendSingleCommand(ctx, _SET, name, key)
 }
 
 // Bulk sets many items in a filter at once.
-func (t *Client) Bulk(ctx context.Context, name Filter, keys ...string) ([]bool, error) {
+func (t *Client) Bulk(ctx context.Context, name string, keys ...string) ([]bool, error) {
 	return t.sendMultiCommand(ctx, _BULK, name, keys...)
 }
 
 // Check checks if a key is in a filter.
-func (t *Client) Check(ctx context.Context, name Filter, key string) (bool, error) {
+func (t *Client) Check(ctx context.Context, name string, key string) (bool, error) {
 	return t.sendSingleCommand(ctx, _CHECK, name, key)
 }
 
 // Multi checks whether multiple keys exist in the filter.
-func (t *Client) Multi(ctx context.Context, name Filter, keys ...string) ([]bool, error) {
+func (t *Client) Multi(ctx context.Context, name string, keys ...string) ([]bool, error) {
 	return t.sendMultiCommand(ctx, _MULTI, name, keys...)
 }
 
 // Create a new filter (a filter is a named bloom filter).
-func (t *Client) Create(ctx context.Context, name Filter) error {
+func (t *Client) Create(ctx context.Context, name string) error {
 	return t.CreateWithParams(ctx, name, 0, 0, false)
 }
 
 // CreateWithParams creates a new filter with the given properties.
-func (t *Client) CreateWithParams(ctx context.Context, name Filter, capacity int, probability float64, inMemory bool) error {
+func (t *Client) CreateWithParams(ctx context.Context, name string, capacity int, probability float64, inMemory bool) error {
 	if probability > 0 && capacity < 1 {
-		return errors.New("invalid capacity/probability")
+		return errors.New("bloomd: invalid capacity/probability")
 	}
 
 	cmd := fmt.Sprintf(_CREATE, name)
@@ -137,41 +144,55 @@ func (t *Client) CreateWithParams(ctx context.Context, name Filter, capacity int
 	case _RESPONSE_EXISTS:
 		return nil
 
+	// This response occurs if a filter of the same name was recently deleted, and
+	// bloomd has not yet completed the delete operation.
+	// TODO (eduardo): support retry
+	case _RESPONSE_DELETE_IN_PROG:
+		return errors.Errorf("bloomd: cmd '%s' failed. Unable to delete, try again in a few seconds.", cmd)
+
 	default:
-		return errors.Errorf("Invalid create resp '%s'", resp)
+		return errors.Errorf("bloomd: cmd '%s' failed. Invalid create resp '%s'", cmd, resp)
 	}
 }
 
 // Info retrieves information about the specified filter.
-func (t *Client) Info(ctx context.Context, name Filter) (map[string]string, error) {
+func (t *Client) Info(ctx context.Context, name string) (map[string]string, error) {
 	return t.sendBlockCommand(ctx, fmt.Sprintf(_INFO, name))
 }
 
 // Drop permanently deletes filter.
-func (t *Client) Drop(ctx context.Context, name Filter) error {
+func (t *Client) Drop(ctx context.Context, name string) error {
 	return t.sendDoneCommand(ctx, fmt.Sprintf(_DROP, name))
 }
 
-// Clear removes a filter from memory but retains it in disk.
-func (t *Client) Clear(ctx context.Context, name Filter) error {
+// Clear removes a items from a filter
+func (t *Client) Clear(ctx context.Context, name string) error {
 	return t.sendDoneCommand(ctx, fmt.Sprintf(_CLEAR, name))
 }
 
 // Close closes a filter (Unmaps from memory, but still accessible).
-func (t *Client) Close(ctx context.Context, name Filter) error {
+func (t *Client) Close(ctx context.Context, name string) error {
 	return t.sendDoneCommand(ctx, fmt.Sprintf(_CLOSE, name))
 }
 
 // List lists all filters.
-func (t *Client) List(ctx context.Context) (map[string]string, error) {
-	// TODO (eduardo): support prefix matching
-	return t.sendBlockCommand(ctx, _LIST)
+func (t *Client) ListAll(ctx context.Context) (map[string]string, error) {
+	return t.sendBlockCommand(ctx, _LIST_ALL)
 }
 
-// Flush flushes all filters to disk or just a specified one.
-func (t *Client) Flush(ctx context.Context) error {
-	// TODO (eduardo): support specifying a filter
-	return t.sendDoneCommand(ctx, _FLUSH)
+// List lists all filters that match the prefix.
+func (t *Client) ListByPrefix(ctx context.Context, prefix string) (map[string]string, error) {
+	return t.sendBlockCommand(ctx, fmt.Sprintf(_LIST, prefix))
+}
+
+// Flush flushes all filters to disk.
+func (t *Client) FlushAll(ctx context.Context) error {
+	return t.sendDoneCommand(ctx, _FLUSH_ALL)
+}
+
+// Flush flushes the speficied filter to disk.
+func (t *Client) FlushFilter(ctx context.Context, name string) error {
+	return t.sendDoneCommand(ctx, fmt.Sprintf(_FLUSH, name))
 }
 
 // Shutdown closes every connection in the pool.
@@ -182,7 +203,7 @@ func (t *Client) Shutdown() {
 // Ping hits bloomD and returns an error or nil.
 func (t *Client) Ping() error {
 	ctx := context.Background()
-	_, err := t.List(ctx)
+	_, err := t.ListAll(ctx)
 	return err
 }
 
@@ -204,15 +225,29 @@ func (t *Client) sendDoneCommand(ctx context.Context, cmd string) error {
 		return errors.Wrapf(err, "bloomd: error with command '%s'", cmd)
 	}
 
-	if resp != _RESPONSE_DONE {
-		return errors.Errorf("bloomd: error with resp '%s' command '%s'", resp, cmd)
+	switch resp {
+	case _RESPONSE_DONE:
+		return nil
+
+	case _RESPONSE_FILTER_NOT_EXIST:
+		return errors.Errorf("bloomd: cmd '%s' failed because filter does not exist.", cmd)
+
+	case _RESPONSE_FILTER_NOT_PROXIED:
+		// This is only a valid response for clear
+		if strings.HasPrefix(cmd, _CMD_CLEAR) {
+			return errors.Errorf("bloomd: cmd '%s' failed because filter is still in memory. Close it first.", cmd)
+		}
+		return errors.Errorf("bloomd: cmd '%s' failed. Invalid resp '%s'", cmd, resp)
+
+	default:
+		return errors.Errorf("bloomd: cmd '%s' failed. Invalid resp '%s'", cmd, resp)
 	}
 
 	return nil
 }
 
 // sendSingleCommand builds and sends the command to bloomD. Returns the response as a boolean.
-func (t *Client) sendSingleCommand(ctx context.Context, c string, name Filter, key string) (bool, error) {
+func (t *Client) sendSingleCommand(ctx context.Context, c string, name string, key string) (bool, error) {
 	cmd := t.buildCommand(c, name, key)
 
 	resp, err := t.sendCommand(ctx, cmd)
@@ -227,13 +262,16 @@ func (t *Client) sendSingleCommand(ctx context.Context, c string, name Filter, k
 	case _RESPONSE_NO:
 		return false, nil
 
+	case _RESPONSE_FILTER_NOT_EXIST:
+		return false, errors.Errorf("bloomd: cmd '%s' failed because filter does not exist.", cmd)
+
 	default:
-		return false, errors.Errorf("bloomd: invalid response '%s'", resp)
+		return false, errors.Errorf("bloomd: cmd '%s' failed. Invalid resp '%s'", cmd, resp)
 	}
 }
 
 // sendSingleCommand builds and sends the command to bloomD. Returns the response as a list of booleans.
-func (t *Client) sendMultiCommand(ctx context.Context, c string, name Filter, keys ...string) ([]bool, error) {
+func (t *Client) sendMultiCommand(ctx context.Context, c string, name string, keys ...string) ([]bool, error) {
 	cmd := t.buildCommand(c, name, keys...)
 
 	resp, err := t.sendCommand(ctx, cmd)
@@ -242,7 +280,7 @@ func (t *Client) sendMultiCommand(ctx context.Context, c string, name Filter, ke
 	}
 
 	if !strings.HasPrefix(resp, _RESPONSE_YES) && !strings.HasPrefix(resp, _RESPONSE_NO) {
-		return nil, errors.Errorf("bloomd: error with multi response '%s' command '%s'", resp, cmd)
+		return nil, errors.Errorf("bloomd: cmd '%s' failed. Invalid resp '%s'", cmd, resp)
 	}
 
 	results := make([]bool, 0, len(keys))
@@ -260,6 +298,12 @@ func (t *Client) sendBlockCommand(ctx context.Context, cmd string) (map[string]s
 		return nil, err
 	}
 
+	// TODO (eduardo): we need to detect when there was a malformed response.
+
+	if resp == _RESPONSE_FILTER_NOT_EXIST {
+		return nil, errors.Errorf("bloomd: cmd '%s' failed because filter does not exist.", cmd)
+	}
+
 	responses := make(map[string]string)
 	for _, line := range strings.Split(resp, "\n") {
 		if line := strings.TrimSpace(line); line != "" {
@@ -274,11 +318,11 @@ func (t *Client) sendBlockCommand(ctx context.Context, cmd string) (map[string]s
 	return responses, nil
 }
 
-func (t *Client) buildCommand(cmd string, name Filter, keys ...string) string {
+func (t *Client) buildCommand(cmd string, name string, keys ...string) string {
 	bldr := &strings.Builder{}
 	bldr.WriteString(cmd)
 	bldr.WriteRune(' ')
-	bldr.WriteString(string(name))
+	bldr.WriteString(name)
 	for _, key := range keys {
 		bldr.WriteRune(' ')
 		bldr.WriteString(t.hashKey(key))

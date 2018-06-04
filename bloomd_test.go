@@ -28,7 +28,7 @@ func TestNewClient(t *testing.T) {
 	assert.NoError(client.Ping())
 }
 
-func TestListFilters(t *testing.T) {
+func TestListAllFilters(t *testing.T) {
 	assert := assert.New(t)
 	startBloomdServer()
 	defer killBloomdServer()
@@ -40,7 +40,7 @@ func TestListFilters(t *testing.T) {
 	assert.NoError(client.Create(ctx, testFilter1))
 	assert.NoError(client.Create(ctx, testFilter2))
 
-	m, err := client.List(ctx)
+	m, err := client.ListAll(ctx)
 	assert.NoError(err)
 
 	assert.Equal(2, len(m))
