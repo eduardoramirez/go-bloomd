@@ -89,6 +89,7 @@ go test
 ## Credits
 
  * Forked from [go-bloomd](https://github.com/sjhitchner/go-bloomd) by [Stephen Hitchner](https://github.com/sjhitchner)
+ * Architecture inspired by [node-bloomd](https://github.com/Medium/node-bloomd)
 
 ## License
 

@@ -15,43 +15,27 @@ import (
 )
 
 const (
-	defaultInitialConnections = 5
-	defaultHashKeys           = false
-	defaultMaxAttempts        = 3
-	defaultMaxConnections     = 10
-	defaultTimeout            = time.Second * 10
-
 	// Valid bloomD commands
-	_FLUSH_ALL       = "flush"
-	_FLUSH           = "flush %s"
-	_LIST_ALL        = "list"
-	_LIST            = "list %s"
-	_CHECK           = "c"
-	_CREATE          = "create %s"
-	_CREATE_CAPACITY = "%s capacity=%d"
-	_CREATE_PROB     = "%s prob=%f"
-	_CREATE_INMEM    = "%s in_memory=1"
-	_DROP            = "drop %s"
-	_CLOSE           = "close %s"
-	_CLEAR           = "clear %s"
-	_MULTI           = "m"
-	_BULK            = "b"
-	_SET             = "s"
-	_INFO            = "info %s"
+	_BULK   = "b"
+	_CHECK  = "c"
+	_CLEAR  = "clear"
+	_CLOSE  = "close"
+	_CREATE = "create"
+	_DROP   = "drop"
+	_FLUSH  = "flush"
+	_INFO   = "info"
+	_LIST   = "list"
+	_MULTI  = "m"
+	_SET    = "s"
 
-	// Raw bloomD commands
-	_CMD_CLEAR = "clear"
+	// Create command optionals
+	_CREATE_CAPACITY = "capacity="
+	_CREATE_PROB     = "prob="
+	_CREATE_INMEM    = "in_memory=1"
 
-	// Valid bloomD responses
-	_RESPONSE_DONE               = "Done"
-	_RESPONSE_EXISTS             = "Exists"
-	_RESPONSE_DELETE_IN_PROG     = "Delete in progress"
-	_RESPONSE_FILTER_NOT_EXIST   = "Filter does not exist"
-	_RESPONSE_FILTER_NOT_PROXIED = "Filter is not proxied. Close it first."
-	_RESPONSE_YES                = "Yes"
-	_RESPONSE_NO                 = "No"
-	_RESPONSE_START              = "START"
-	_RESPONSE_END                = "END"
+	// Valid bloomD block identifiers
+	_RESPONSE_START = "START"
+	_RESPONSE_END   = "END"
 )
 
 type channelPool interface {
@@ -92,22 +76,46 @@ func NewClient(hostname string, opts ...Option) (*Client, error) {
 
 // Set sets a key in a filter.
 func (t *Client) Set(ctx context.Context, name string, key string) (bool, error) {
-	return t.sendSingleCommand(ctx, _SET, name, key)
+	cmd := t.buildCommand(_SET, name, key)
+	resp, err := t.sendCommand(ctx, cmd)
+	if err != nil {
+		return false, err
+	}
+
+	return parseBool(resp)
 }
 
 // Bulk sets many items in a filter at once.
 func (t *Client) Bulk(ctx context.Context, name string, keys ...string) ([]bool, error) {
-	return t.sendMultiCommand(ctx, _BULK, name, keys...)
+	cmd := t.buildCommand(_BULK, name, keys...)
+	resp, err := t.sendCommand(ctx, cmd)
+	if err != nil {
+		return nil, err
+	}
+
+	return parseBoolList(len(keys), resp)
 }
 
 // Check checks if a key is in a filter.
 func (t *Client) Check(ctx context.Context, name string, key string) (bool, error) {
-	return t.sendSingleCommand(ctx, _CHECK, name, key)
+	cmd := t.buildCommand(_CHECK, name, key)
+	resp, err := t.sendCommand(ctx, cmd)
+	if err != nil {
+		return false, err
+	}
+
+	return parseBool(resp)
 }
 
 // Multi checks whether multiple keys exist in the filter.
 func (t *Client) Multi(ctx context.Context, name string, keys ...string) ([]bool, error) {
-	return t.sendMultiCommand(ctx, _MULTI, name, keys...)
+	cmd := t.buildCommand(_MULTI, name, keys...)
+	resp, err := t.sendCommand(ctx, cmd)
+	if err != nil {
+		return nil, err
+	}
+
+	return parseBoolList(len(keys), resp)
 }
 
 // Create a new filter (a filter is a named bloom filter).
@@ -121,78 +129,99 @@ func (t *Client) CreateWithParams(ctx context.Context, name string, capacity int
 		return errors.New("bloomd: invalid capacity/probability")
 	}
 
-	cmd := fmt.Sprintf(_CREATE, name)
-	if capacity > 0 {
-		cmd = fmt.Sprintf(_CREATE_CAPACITY, cmd, capacity)
-	}
-	if probability > 0 {
-		cmd = fmt.Sprintf(_CREATE_PROB, cmd, probability)
-	}
-	if inMemory {
-		cmd = fmt.Sprintf(_CREATE_INMEM, cmd)
-	}
-
+	cmd := t.buildCreateCommand(name, capacity, probability, inMemory)
 	resp, err := t.sendCommand(ctx, cmd)
 	if err != nil {
 		return err
 	}
 
-	switch resp {
-	case _RESPONSE_DONE:
-		return nil
-
-	case _RESPONSE_EXISTS:
-		return nil
-
-	// This response occurs if a filter of the same name was recently deleted, and
-	// bloomd has not yet completed the delete operation.
-	// TODO (eduardo): support retry
-	case _RESPONSE_DELETE_IN_PROG:
-		return errors.Errorf("bloomd: cmd '%s' failed. Unable to delete, try again in a few seconds.", cmd)
-
-	default:
-		return errors.Errorf("bloomd: cmd '%s' failed. Invalid create resp '%s'", cmd, resp)
-	}
+	return parseCreate(resp)
 }
 
 // Info retrieves information about the specified filter.
-func (t *Client) Info(ctx context.Context, name string) (map[string]string, error) {
-	return t.sendBlockCommand(ctx, fmt.Sprintf(_INFO, name))
+func (t *Client) Info(ctx context.Context, name string) (VerboseBloomFilter, error) {
+	cmd := t.buildCommand(_INFO, name)
+	resp, err := t.sendCommand(ctx, cmd)
+	if err != nil {
+		return VerboseBloomFilter{}, err
+	}
+
+	return parseInfo(name, resp)
 }
 
 // Drop permanently deletes filter.
 func (t *Client) Drop(ctx context.Context, name string) error {
-	return t.sendDoneCommand(ctx, fmt.Sprintf(_DROP, name))
+	cmd := t.buildCommand(_DROP, name)
+	resp, err := t.sendCommand(ctx, cmd)
+	if err != nil {
+		return err
+	}
+
+	return parseDropConfirmation(resp)
 }
 
 // Clear removes a items from a filter
 func (t *Client) Clear(ctx context.Context, name string) error {
-	return t.sendDoneCommand(ctx, fmt.Sprintf(_CLEAR, name))
+	cmd := t.buildCommand(_CLEAR, name)
+	resp, err := t.sendCommand(ctx, cmd)
+	if err != nil {
+		return err
+	}
+
+	return parseConfirmation(resp)
 }
 
 // Close closes a filter (Unmaps from memory, but still accessible).
 func (t *Client) Close(ctx context.Context, name string) error {
-	return t.sendDoneCommand(ctx, fmt.Sprintf(_CLOSE, name))
+	cmd := t.buildCommand(_CLOSE, name)
+	resp, err := t.sendCommand(ctx, cmd)
+	if err != nil {
+		return err
+	}
+
+	return parseConfirmation(resp)
 }
 
 // List lists all filters.
-func (t *Client) ListAll(ctx context.Context) (map[string]string, error) {
-	return t.sendBlockCommand(ctx, _LIST_ALL)
+func (t *Client) ListAll(ctx context.Context) ([]BloomFilter, error) {
+	resp, err := t.sendCommand(ctx, _LIST)
+	if err != nil {
+		return nil, err
+	}
+
+	return parseFilterList(resp)
 }
 
 // List lists all filters that match the prefix.
-func (t *Client) ListByPrefix(ctx context.Context, prefix string) (map[string]string, error) {
-	return t.sendBlockCommand(ctx, fmt.Sprintf(_LIST, prefix))
+func (t *Client) ListByPrefix(ctx context.Context, prefix string) ([]BloomFilter, error) {
+	cmd := t.buildCommand(_LIST, prefix)
+	resp, err := t.sendCommand(ctx, cmd)
+	if err != nil {
+		return nil, err
+	}
+
+	return parseFilterList(resp)
 }
 
 // Flush flushes all filters to disk.
 func (t *Client) FlushAll(ctx context.Context) error {
-	return t.sendDoneCommand(ctx, _FLUSH_ALL)
+	resp, err := t.sendCommand(ctx, _FLUSH)
+	if err != nil {
+		return err
+	}
+
+	return parseConfirmation(resp)
 }
 
 // Flush flushes the speficied filter to disk.
 func (t *Client) FlushFilter(ctx context.Context, name string) error {
-	return t.sendDoneCommand(ctx, fmt.Sprintf(_FLUSH, name))
+	cmd := t.buildCommand(_FLUSH, name)
+	resp, err := t.sendCommand(ctx, cmd)
+	if err != nil {
+		return err
+	}
+
+	return parseConfirmation(resp)
 }
 
 // Shutdown closes every connection in the pool.
@@ -217,115 +246,36 @@ func (t *Client) hashKey(key string) string {
 	return key
 }
 
-// sendDoneCommand sends the command to bloomD. Returns an error if the
-// reply was malformed.
-func (t *Client) sendDoneCommand(ctx context.Context, cmd string) error {
-	resp, err := t.sendCommand(ctx, cmd)
-	if err != nil {
-		return errors.Wrapf(err, "bloomd: error with command '%s'", cmd)
-	}
-
-	switch resp {
-	case _RESPONSE_DONE:
-		return nil
-
-	case _RESPONSE_FILTER_NOT_EXIST:
-		return errors.Errorf("bloomd: cmd '%s' failed because filter does not exist.", cmd)
-
-	case _RESPONSE_FILTER_NOT_PROXIED:
-		// This is only a valid response for clear
-		if strings.HasPrefix(cmd, _CMD_CLEAR) {
-			return errors.Errorf("bloomd: cmd '%s' failed because filter is still in memory. Close it first.", cmd)
-		}
-		return errors.Errorf("bloomd: cmd '%s' failed. Invalid resp '%s'", cmd, resp)
-
-	default:
-		return errors.Errorf("bloomd: cmd '%s' failed. Invalid resp '%s'", cmd, resp)
-	}
-
-	return nil
-}
-
-// sendSingleCommand builds and sends the command to bloomD. Returns the response as a boolean.
-func (t *Client) sendSingleCommand(ctx context.Context, c string, name string, key string) (bool, error) {
-	cmd := t.buildCommand(c, name, key)
-
-	resp, err := t.sendCommand(ctx, cmd)
-	if err != nil {
-		return false, errors.Wrapf(err, "bloomd: error with single command '%s'", cmd)
-	}
-
-	switch resp {
-	case _RESPONSE_YES:
-		return true, nil
-
-	case _RESPONSE_NO:
-		return false, nil
-
-	case _RESPONSE_FILTER_NOT_EXIST:
-		return false, errors.Errorf("bloomd: cmd '%s' failed because filter does not exist.", cmd)
-
-	default:
-		return false, errors.Errorf("bloomd: cmd '%s' failed. Invalid resp '%s'", cmd, resp)
-	}
-}
-
-// sendSingleCommand builds and sends the command to bloomD. Returns the response as a list of booleans.
-func (t *Client) sendMultiCommand(ctx context.Context, c string, name string, keys ...string) ([]bool, error) {
-	cmd := t.buildCommand(c, name, keys...)
-
-	resp, err := t.sendCommand(ctx, cmd)
-	if err != nil {
-		return nil, errors.Wrapf(err, "bloomd: error with multi command '%s'", cmd)
-	}
-
-	if !strings.HasPrefix(resp, _RESPONSE_YES) && !strings.HasPrefix(resp, _RESPONSE_NO) {
-		return nil, errors.Errorf("bloomd: cmd '%s' failed. Invalid resp '%s'", cmd, resp)
-	}
-
-	results := make([]bool, 0, len(keys))
-	for _, r := range strings.Split(resp, " ") {
-		results = append(results, r == _RESPONSE_YES)
-	}
-
-	return results, nil
-}
-
-// sendBlockCommand sends the command to bloomD. Returns the response key value pairs.
-func (t *Client) sendBlockCommand(ctx context.Context, cmd string) (map[string]string, error) {
-	resp, err := t.sendCommand(ctx, cmd)
-	if err != nil {
-		return nil, err
-	}
-
-	// TODO (eduardo): we need to detect when there was a malformed response.
-
-	if resp == _RESPONSE_FILTER_NOT_EXIST {
-		return nil, errors.Errorf("bloomd: cmd '%s' failed because filter does not exist.", cmd)
-	}
-
-	responses := make(map[string]string)
-	for _, line := range strings.Split(resp, "\n") {
-		if line := strings.TrimSpace(line); line != "" {
-			split := strings.SplitN(line, " ", 2)
-			if len(split) != 2 {
-				continue
-			}
-			responses[split[0]] = split[1]
-		}
-	}
-
-	return responses, nil
-}
-
-func (t *Client) buildCommand(cmd string, name string, keys ...string) string {
+func (t *Client) buildCommand(cmd string, arg string, keys ...string) string {
 	bldr := &strings.Builder{}
 	bldr.WriteString(cmd)
 	bldr.WriteRune(' ')
-	bldr.WriteString(name)
+	bldr.WriteString(arg)
 	for _, key := range keys {
 		bldr.WriteRune(' ')
 		bldr.WriteString(t.hashKey(key))
+	}
+	return bldr.String()
+}
+
+func (t *Client) buildCreateCommand(name string, capacity int, probability float64, inMemory bool) string {
+	bldr := &strings.Builder{}
+	bldr.WriteString(_CREATE)
+	bldr.WriteRune(' ')
+	bldr.WriteString(name)
+	if capacity > 0 {
+		bldr.WriteRune(' ')
+		bldr.WriteString(_CREATE_CAPACITY)
+		bldr.WriteString(fmt.Sprintf("%d", capacity))
+	}
+	if probability > 0 {
+		bldr.WriteRune(' ')
+		bldr.WriteString(_CREATE_PROB)
+		bldr.WriteString(fmt.Sprintf("%f", probability))
+	}
+	if inMemory {
+		bldr.WriteRune(' ')
+		bldr.WriteString(_CREATE_INMEM)
 	}
 	return bldr.String()
 }
@@ -389,7 +339,7 @@ func send(w io.Writer, cmd string, maxAttempts int) error {
 	return errors.Wrap(err, "bloomd: unable to write to connection")
 }
 
-// recv retrieves the response from bloomD and parses it.
+// recv retrieves the response from bloomD.
 func recv(r io.Reader) (string, error) {
 	bldr := &strings.Builder{}
 	reader := bufio.NewReader(r)
@@ -410,14 +360,18 @@ func recv(r io.Reader) (string, error) {
 				break
 			} else {
 				bldr.WriteString(blockTxt)
-				bldr.WriteRune('\n')
 			}
 		}
 	} else {
 		bldr.WriteString(txt)
 	}
 
-	return strings.TrimRight(bldr.String(), "\r\n"), nil
+	// Strip out the last newline
+	responseString := bldr.String()
+	responseString = strings.TrimRight(responseString, "\r\n")
+	responseString = strings.TrimRight(responseString, "\n")
+
+	return responseString, nil
 }
 
 func checkConnectionError(conn net.Conn, err error) error {
