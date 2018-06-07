@@ -40,15 +40,13 @@ func TestListAllFilters(t *testing.T) {
 	assert.NoError(client.Create(ctx, testFilter1))
 	assert.NoError(client.Create(ctx, testFilter2))
 
-	m, err := client.ListAll(ctx)
+	filters, err := client.ListAll(ctx)
 	assert.NoError(err)
 
-	assert.Equal(2, len(m))
+	assert.Equal(2, len(filters))
 
-	_, ok := m[testFilter1]
-	assert.Equal(true, ok)
-	_, ok = m[testFilter2]
-	assert.Equal(true, ok)
+	assert.Equal("test_filter_1", filters[0].Name)
+	assert.Equal("test_filter_2", filters[1].Name)
 
 	assert.NoError(client.Drop(ctx, testFilter1))
 	assert.NoError(client.Drop(ctx, testFilter2))

@@ -2,6 +2,14 @@ package bloomd
 
 import "time"
 
+const (
+	defaultInitialConnections = 5
+	defaultHashKeys           = false
+	defaultMaxAttempts        = 3
+	defaultMaxConnections     = 10
+	defaultTimeout            = time.Second * 10
+)
+
 // Option is configuration setting for the bloomD client.
 type Option func(*options)
 
