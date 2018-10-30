@@ -76,7 +76,6 @@ A number of config options are available for the client:
 * ```initialConnections```: The number of connections the pool will be initialized with. Defaults to 5.
 * ```maxConnections```: The number of maximum connections the pool will have at any given time. Defaults to 10.
 * ```maxAttempts```: The number of retries when communicating to bloomD. Defaults to 3.
-* ```timeout```: How long to wait for bloomD to reply before returning an error. Defaults to 10 seconds.
 
 ## Test
 
