@@ -8,7 +8,6 @@ import (
 	"io"
 	"net"
 	"strings"
-	"time"
 
 	"github.com/pkg/errors"
 	pool "gopkg.in/fatih/pool.v2"
@@ -47,7 +46,6 @@ type channelPool interface {
 type Client struct {
 	pool        channelPool
 	hostname    string
-	timeout     time.Duration
 	maxAttempts int
 	hashKeys    bool
 }
@@ -68,7 +66,6 @@ func NewClient(hostname string, opts ...Option) (*Client, error) {
 	return &Client{
 		pool:        pool,
 		hostname:    hostname,
-		timeout:     o.timeout,
 		maxAttempts: o.maxAttempts,
 		hashKeys:    o.hashKeys,
 	}, nil
@@ -286,13 +283,10 @@ func (t *Client) sendCommand(ctx context.Context, cmd string) (string, error) {
 	var err error
 	var line string
 
-	ch := make(chan error, 1)
-
-	ctx, cancel := context.WithTimeout(ctx, t.timeout)
-	defer cancel()
+	errCh := make(chan error, 1)
 
 	go func() {
-		ch <- func() error {
+		errCh <- func() error {
 			conn, err = t.pool.Get()
 			if err != nil {
 				return err
@@ -313,7 +307,7 @@ func (t *Client) sendCommand(ctx context.Context, cmd string) (string, error) {
 	}()
 
 	select {
-	case err := <-ch:
+	case err := <-errCh:
 		if err != nil {
 			return "", checkConnectionError(conn, err)
 		}

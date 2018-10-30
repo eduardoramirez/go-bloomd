@@ -1,13 +1,10 @@
 package bloomd
 
-import "time"
-
 const (
 	defaultInitialConnections = 5
 	defaultHashKeys           = false
 	defaultMaxAttempts        = 3
 	defaultMaxConnections     = 10
-	defaultTimeout            = time.Second * 10
 )
 
 // Option is configuration setting for the bloomD client.
@@ -18,7 +15,6 @@ type options struct {
 	initialConnections int
 	maxAttempts        int
 	maxConnections     int
-	timeout            time.Duration
 }
 
 var defaultOptions = &options{
@@ -26,7 +22,6 @@ var defaultOptions = &options{
 	hashKeys:           defaultHashKeys,
 	maxAttempts:        defaultMaxAttempts,
 	maxConnections:     defaultMaxConnections,
-	timeout:            defaultTimeout,
 }
 
 func evaluateOptions(opts []Option) *options {
@@ -66,12 +61,5 @@ func WithMaxAttempts(maxAttempts int) Option {
 func WithMaxConnections(maxConnections int) Option {
 	return func(o *options) {
 		o.maxConnections = maxConnections
-	}
-}
-
-// WithTimeout sets how long the client will wait for bloomD before returning an error.
-func WithTimeout(timeout time.Duration) Option {
-	return func(o *options) {
-		o.timeout = timeout
 	}
 }
