@@ -56,7 +56,9 @@ func parseBool(resp string) (bool, error) {
 // parseBoolList returns bloomD's reply as a boolean list. If the
 // response was malformed it returns an error.
 func parseBoolList(n int, resp string) ([]bool, error) {
-	if !strings.HasPrefix(resp, _RESPONSE_YES) && !strings.HasPrefix(resp, _RESPONSE_NO) {
+	if resp == _RESPONSE_FILTER_NOT_EXIST {
+		return nil, FilterDoesNotExist
+	} else if !strings.HasPrefix(resp, _RESPONSE_YES) && !strings.HasPrefix(resp, _RESPONSE_NO) {
 		return nil, errors.Errorf("bloomd: unexpected response %s", resp)
 	}
 
@@ -103,7 +105,7 @@ func parseCreate(resp string) error {
 	// bloomd has not yet completed the delete operation.
 	// TODO (eduardo): support retry
 	case _RESPONSE_DELETE_IN_PROG:
-		return errors.New(resp)
+		return DeleteInProgress
 	default:
 		return errors.New(resp)
 	}
